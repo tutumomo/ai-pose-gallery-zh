@@ -167,6 +167,10 @@ cloudflared tunnel --url http://127.0.0.1:8789   # 免帳號，網址每次重�
 
 ## 本機 Gateway（magpie / 本機模型）
 
+> app 內建的「快速范本」只保留 **MiniMax** 與 **Ollama Cloud**（線上版連不到本機 gateway，所以不再提供 magpie / agy 范本）。
+> 要用本機上游時請手動新增供應商：Base URL 填 `http://127.0.0.1:8788/v1`（生圖）或 `http://127.0.0.1:8788/agy/v1`（文字），認證方式選「不驗證（本機 gateway / agy）」。
+
+
 瀏覽器不能直接呼叫 `127.0.0.1` 的上游（沒有 CORS），而線上版是 https、fetch 到 http 又會被 mixed content 擋。所以本機上游要走一個小 gateway：
 
 ```bash

@@ -251,56 +251,6 @@ export interface CustomProviderPreset {
 /** 常用第三方服务的快速范本（含本机 magpie 闸道） */
 export const CUSTOM_PROVIDER_PRESETS: CustomProviderPreset[] = [
   {
-    id: 'magpie-image',
-    label: 'magpie 本机闸道 · 生图',
-    apply: (p) => ({
-      ...p,
-      name: 'magpie 生图',
-      protocol: 'openai_images',
-      baseUrl: 'http://127.0.0.1:8788/v1',
-      models: ['workbuddy-ai/hy-image-3.5'],
-      model: 'workbuddy-ai/hy-image-3.5',
-      purpose: 'image',
-      authMode: 'none',
-      apiKey: '',
-    }),
-  },
-  {
-    id: 'magpie-antigravity',
-    label: 'magpie · Antigravity（Google Pro 额度）',
-    apply: (p) => ({
-      ...p,
-      name: 'Antigravity 文字',
-      protocol: 'openai_chat',
-      baseUrl: 'http://127.0.0.1:8788/v1',
-      models: ['antigravity/gemini-4-argon', 'antigravity/claude-opus-5-5'],
-      model: 'antigravity/gemini-4-argon',
-      purpose: 'chat',
-      authMode: 'none',
-      apiKey: '',
-    }),
-  },
-  {
-    id: 'agy-antigravity',
-    label: 'agy Antigravity（Google Pro 额度）',
-    apply: (p) => ({
-      ...p,
-      name: 'Antigravity（agy）',
-      protocol: 'openai_chat',
-      baseUrl: 'http://127.0.0.1:8788/agy/v1',
-      models: [
-        'gemini-4-argon-high',
-        'magpie/antigravity/gemini-4-argon',
-        'magpie/antigravity/claude-sonnet-5-5',
-        'magpie/group/gemini',
-      ],
-      model: 'gemini-4-argon-high',
-      purpose: 'chat',
-      authMode: 'none',
-      apiKey: '',
-    }),
-  },
-  {
     id: 'ollama-cloud',
     label: 'Ollama Cloud · 文字',
     apply: (p) => ({
