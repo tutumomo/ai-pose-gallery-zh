@@ -106,6 +106,51 @@
 
 ---
 
+## 自架部署（本機 + Tailscale）
+
+不想用 Cloudflare 也可以整個跑在自己機器上。`scripts/serve.mjs` 是一個零依賴的 Node 伺服器：靜態檔案 + `/api/proxy` + `/api/oauth/token`，行為與線上 Worker 版一致。
+
+```bash
+pnpm build                 # 只有前端程式碼需要 build；素材不複製
+node scripts/serve.mjs     # → http://127.0.0.1:8789
+```
+
+- 素材（`img/` `thumbs/` `data/`）直接從 repo 根目錄出，不做 1.1GB 拷貝。
+- 未知路徑回 `dist/index.html`（前端路由 fallback）。
+
+### systemd 常駐（本機已設定）
+
+```bash
+systemctl --user status pose-gallery.service pose-gallery-gateway.service
+systemctl --user restart pose-gallery.service
+```
+
+| 服務 | 監聽 | 用途 |
+|---|---|---|
+| `pose-gallery.service` | `100.84.216.26:8789` | 網站本體 + API 端點 |
+| `pose-gallery-gateway.service` | `100.84.216.26:8788` | 本機上游 CORS 轉接（magpie / agy） |
+
+綁 Tailscale IP 而不是 `0.0.0.0`，避免曝露在區網。手機裝 Tailscale 後直接開 **http://100.84.216.26:8789** 就能用。
+
+### 從手機用本機供應商（magpie / agy）
+
+瀏覽器跑在手機時，provider 的 Base URL 要填**桌面機的 Tailscale 位址**，不是 `127.0.0.1`：
+
+| 用途 | Base URL |
+|---|---|
+| magpie 生圖 | `http://100.84.216.26:8788/v1` |
+| agy Antigravity | `http://100.84.216.26:8788/agy/v1` |
+
+同時把「參考圖傳參方式」改成 **轉 Base64 編碼傳輸** —— 雲端模型抓不到 `100.84.216.26` 上的圖片。
+
+### 想公開給別人用
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:8789   # 免帳號，網址每次重啟會變
+```
+
+要固定網域就用具名隧道（需 `cloudflared tunnel login` + 你自己的網域）。
+
 ## 本機 Gateway（magpie / 本機模型）
 
 瀏覽器不能直接呼叫 `127.0.0.1` 的上游（沒有 CORS），而線上版是 https、fetch 到 http 又會被 mixed content 擋。所以本機上游要走一個小 gateway：
