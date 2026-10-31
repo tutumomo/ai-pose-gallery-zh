@@ -80,7 +80,7 @@ export type ProviderProtocol =
   | 'minimax'
   | 'custom_json'
 
-export type ProviderAuthMode = 'apiKey' | 'oauth_pkce' | 'oauth_device'
+export type ProviderAuthMode = 'apiKey' | 'oauth_pkce' | 'oauth_device' | 'none'
 
 export type ProviderPurpose = 'image' | 'chat'
 

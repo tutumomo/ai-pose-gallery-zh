@@ -650,7 +650,7 @@ function ProviderEditor({
             </label>
           )}
 
-          {draft.authMode !== 'apiKey' && (
+          {draft.authMode === 'oauth_pkce' || draft.authMode === 'oauth_device' ? (
             <div className="space-y-3 rounded-xl border p-3 sm:col-span-2">
               <div className="text-xs font-semibold">OAuth 設定</div>
               <div className="grid gap-3 sm:grid-cols-2">
@@ -733,12 +733,16 @@ function ProviderEditor({
                 </label>
               </div>
               <p className="text-[11px] text-muted-foreground">
+                只对真正提供第三方 OAuth 的服务有效（MiniMax / 豆包 / 百炼 / Ollama Cloud 都只发 API Key）。
+                Antigravity（agy）不适用 —— 它自己处理 Google 账号登录，请改用「不验证（本机 gateway / agy）」。
+              </p>
+              <p className="text-[11px] text-muted-foreground">
                 服务端兑换需在 Cloudflare 设置同名 secret，并把 token 域名加进
                 <span className="font-mono"> OAUTH_TOKEN_HOSTS </span>
                 白名单，否则 /api/oauth/token 会回 403。
               </p>
             </div>
-          )}
+          ) : null}
 
           {draft.protocol === 'custom_json' && (
             <div className="space-y-3 rounded-xl border p-3 sm:col-span-2">

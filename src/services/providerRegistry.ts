@@ -260,8 +260,8 @@ export const CUSTOM_PROVIDER_PRESETS: CustomProviderPreset[] = [
       models: ['workbuddy-ai/hy-image-3.5'],
       model: 'workbuddy-ai/hy-image-3.5',
       purpose: 'image',
-      authMode: 'apiKey',
-      apiKey: 'local',
+      authMode: 'none',
+      apiKey: '',
     }),
   },
   {
@@ -275,8 +275,8 @@ export const CUSTOM_PROVIDER_PRESETS: CustomProviderPreset[] = [
       models: ['antigravity/gemini-4-argon', 'antigravity/claude-opus-5-5'],
       model: 'antigravity/gemini-4-argon',
       purpose: 'chat',
-      authMode: 'apiKey',
-      apiKey: 'local',
+      authMode: 'none',
+      apiKey: '',
     }),
   },
   {
@@ -295,8 +295,8 @@ export const CUSTOM_PROVIDER_PRESETS: CustomProviderPreset[] = [
       ],
       model: 'gemini-4-argon-high',
       purpose: 'chat',
-      authMode: 'apiKey',
-      apiKey: 'local',
+      authMode: 'none',
+      apiKey: '',
     }),
   },
   {

@@ -391,6 +391,8 @@ function parseExtraHeaders(raw: string): Record<string, string> {
 }
 
 async function resolveAuth(p: ResolvedProvider): Promise<string> {
+  // 本机 gateway（agy / magpie）不驗證憑證
+  if (p.authMode === 'none') return 'local'
   if (p.authMode === 'apiKey') return p.apiKey
   const token = await getAccessToken(p)
   return token || ''
