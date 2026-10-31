@@ -25,7 +25,6 @@ import { spawn } from 'node:child_process'
 const PORT = Number(process.env.PORT || 8788)
 const HOST = process.env.HOST || '127.0.0.1'
 const UPSTREAM = (process.env.MAGPIE_BASE_URL || 'http://127.0.0.1:3425').replace(/\/+$/, '')
-const ALLOW_HOST = process.env.MAGPIE_ALLOW_HOSTS || '127.0.0.1,localhost'
 
 function readGeminiKey() {
   if (process.env.MAGPIE_API_KEY) return process.env.MAGPIE_API_KEY.trim()
