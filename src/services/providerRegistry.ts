@@ -128,6 +128,7 @@ export const PROTOCOL_OPTIONS: Array<{
 
 export const AUTH_MODE_OPTIONS: Array<{ value: ProviderAuthMode; label: string }> = [
   { value: 'apiKey', label: 'API Key' },
+  { value: 'none', label: '不驗證（本機 gateway / agy）' },
   { value: 'oauth_pkce', label: 'OAuth 授權碼 + PKCE' },
   { value: 'oauth_device', label: 'OAuth Device Code' },
 ]
