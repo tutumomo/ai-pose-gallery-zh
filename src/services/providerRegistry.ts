@@ -241,6 +241,74 @@ export function emptyOAuthConfig(): CustomProviderOAuth {
   }
 }
 
+export interface CustomProviderPreset {
+  id: string
+  label: string
+  apply: (p: CustomProvider) => CustomProvider
+}
+
+/** 常用第三方服务的快速范本（含本机 magpie 闸道） */
+export const CUSTOM_PROVIDER_PRESETS: CustomProviderPreset[] = [
+  {
+    id: 'magpie-image',
+    label: 'magpie 本机闸道 · 生图',
+    apply: (p) => ({
+      ...p,
+      name: 'magpie 生图',
+      protocol: 'openai_images',
+      baseUrl: 'http://127.0.0.1:8788/v1',
+      models: ['workbuddy-ai/hy-image-3.5'],
+      model: 'workbuddy-ai/hy-image-3.5',
+      purpose: 'image',
+      authMode: 'apiKey',
+      apiKey: 'local',
+    }),
+  },
+  {
+    id: 'magpie-antigravity',
+    label: 'magpie · Antigravity（Google Pro 额度）',
+    apply: (p) => ({
+      ...p,
+      name: 'Antigravity 文字',
+      protocol: 'openai_chat',
+      baseUrl: 'http://127.0.0.1:8788/v1',
+      models: ['antigravity/gemini-4-argon', 'antigravity/claude-opus-5-5'],
+      model: 'antigravity/gemini-4-argon',
+      purpose: 'chat',
+      authMode: 'apiKey',
+      apiKey: 'local',
+    }),
+  },
+  {
+    id: 'ollama-cloud',
+    label: 'Ollama Cloud · 文字',
+    apply: (p) => ({
+      ...p,
+      name: 'Ollama Cloud',
+      protocol: 'openai_chat',
+      baseUrl: 'https://ollama.com/v1',
+      models: ['gpt-oss:120b'],
+      model: 'gpt-oss:120b',
+      purpose: 'chat',
+      authMode: 'apiKey',
+    }),
+  },
+  {
+    id: 'minimax',
+    label: 'MiniMax 生图',
+    apply: (p) => ({
+      ...p,
+      name: 'MiniMax 生图',
+      protocol: 'minimax',
+      baseUrl: 'https://api.minimax.io',
+      models: ['image-01', 'image-01-live'],
+      model: 'image-01',
+      purpose: 'image',
+      authMode: 'apiKey',
+    }),
+  },
+]
+
 export function newCustomProvider(): CustomProvider {
   return {
     id: createCustomProviderId(),

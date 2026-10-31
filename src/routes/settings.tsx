@@ -34,6 +34,7 @@ import { clearToken, readToken, runDeviceFlow, runPkceFlow, type DeviceFlowPromp
 import {
   AUTH_MODE_OPTIONS,
   BUILTIN_IDS,
+  CUSTOM_PROVIDER_PRESETS,
   emptyOAuthConfig,
   isBuiltinProviderId,
   listProviders,
@@ -520,6 +521,28 @@ function ProviderEditor({
         </DialogHeader>
 
         <div className="grid gap-3 sm:grid-cols-2">
+          <label className="text-xs font-medium sm:col-span-2">
+            快速范本
+            <Select
+              value="none"
+              onValueChange={(v) => {
+                const preset = CUSTOM_PROVIDER_PRESETS.find((x) => x.id === v)
+                if (preset) set(preset.apply(draft))
+              }}
+            >
+              <SelectTrigger className="mt-1 w-full">
+                <SelectValue placeholder="选择范本快速填写" />
+              </SelectTrigger>
+              <SelectContent>
+                {CUSTOM_PROVIDER_PRESETS.map((preset) => (
+                  <SelectItem key={preset.id} value={preset.id}>
+                    {preset.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </label>
+
           <label className="text-xs font-medium">
             名称
             <Input

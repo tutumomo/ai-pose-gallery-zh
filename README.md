@@ -106,6 +106,27 @@
 
 ---
 
+## 本機 Gateway（magpie / 本機模型）
+
+瀏覽器不能直接呼叫 `127.0.0.1` 的上游（沒有 CORS），而線上版是 https、fetch 到 http 又會被 mixed content 擋。所以本機上游要走一個小 gateway：
+
+```bash
+cd ~/ai-pose-gallery-zh
+node scripts/local-gateway.mjs      # → http://127.0.0.1:8788，轉發 /v1/* 到 http://127.0.0.1:3425
+```
+
+API key 只留在 gateway process 內（優先讀 `MAGPIE_API_KEY` 環境變數，其次 `~/.gemini/.env` 的 `GEMINI_API_KEY`），不會送進瀏覽器。
+
+接著在 app 裡（**用本機 `pnpm dev` 開 `http://localhost:5173`**）：
+
+1. 設定頁 →「自訂供應商」→「新增供應商」→「快速範本」選 **magpie 本機閘道 · 生圖**（Base URL `http://127.0.0.1:8788/v1`，模型 `workbuddy-ai/hy-image-3.5`）。
+2. 全域請求選項把「參考圖傳參方式」改成 **轉 Base64 編碼傳輸**（magpie 上游只吃 base64，不吃公網 URL）。
+3. 合成台選這個供應商 → 生成角色圖。
+
+要把 Google Pro 訂閱額度（Antigravity）也用上：範本選 **magpie · Antigravity（Google Pro 額度）**，模型如 `antigravity/gemini-4-argon`、`antigravity/claude-opus-5-5`；它是文字模型，到設定頁「提示詞擴寫」把它設為提示詞供應商，合成台的「AI 擴寫」就會走你的 Pro 額度。
+
+> 線上部署版（`*.workers.dev`）無法連到 `127.0.0.1`，要用 magpie 就跑本機版；若要線上也能用，需要另外把 gateway  exposes 出去（tunnel / VPS）。
+
 ## 自订供应商与 OAuth
 
 ### 1. 新增自订供应商
