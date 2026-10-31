@@ -36,16 +36,22 @@ import {
   buildRecipePrompt,
   fileToDataUrl,
   PROVIDER_META,
+  rewritePromptWithChat,
   stitchRecipeCanvas,
   STYLE_PRESETS,
 } from '@/services/aiGenerator'
+import {
+  isBuiltinProviderId,
+  listProviders,
+  resolveProvider,
+} from '@/services/providerRegistry'
 import { useStudio } from '@/store/studioStore'
 import type {
   DoubaoParams,
   GeminiParams,
   GptParams,
   ImagePassMode,
-  ImageProviderId,
+  MinimaxParams,
   QwenParams,
 } from '@/types/gallery'
 
@@ -53,8 +59,6 @@ export const Route = createFileRoute('/studio')({
   staticData: { title: 'AI 合成台' },
   component: StudioPage,
 })
-
-const PROVIDER_LIST: ImageProviderId[] = ['gemini', 'gpt', 'qwen', 'doubao']
 
 function StudioPage() {
   const {
@@ -75,11 +79,13 @@ function StudioPage() {
     removeExtraImage,
     updateExtraImageName,
     updateApiConfig,
-    updateProviderConfig,
+    setActiveProvider,
+    updateActiveProviderConfig,
     updateGptParams,
     updateGeminiParams,
     updateQwenParams,
     updateDoubaoParams,
+    updateMinimaxParams,
     randomizeRecipe,
     removeHistoryItem,
     clearHistory,
@@ -88,8 +94,17 @@ function StudioPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const activeProvider = apiConfig.activeProvider
-  const providerMeta = PROVIDER_META[activeProvider]
-  const providerCfg = apiConfig.providers[activeProvider]
+  const resolvedProvider = resolveProvider(apiConfig, activeProvider)
+  const providerOptions = listProviders(apiConfig, 'image')
+  const builtinMeta = isBuiltinProviderId(activeProvider) ? PROVIDER_META[activeProvider] : null
+  const builtinCfg = isBuiltinProviderId(activeProvider) ? apiConfig.providers[activeProvider] : null
+  const customProvider = apiConfig.customProviders.find((p) => p.id === activeProvider)
+  const modelOptions = builtinMeta
+    ? builtinMeta.models
+    : (customProvider?.models || []).map((m) => ({ value: m, label: m }))
+  const currentModel = builtinMeta
+    ? builtinCfg?.model || ''
+    : customProvider?.model || customProvider?.models[0] || ''
 
   const defaultPrompt = buildRecipePrompt(recipe, apiConfig.stylePreset)
   const prompt = customPrompt ?? defaultPrompt
@@ -99,6 +114,7 @@ function StudioPage() {
   const [stitchModalUrl, setStitchModalUrl] = useState<string | null>(null)
   const [zoomImageUrl, setZoomImageUrl] = useState<string | null>(null)
   const [isDragging, setIsDragging] = useState(false)
+  const [isRewriting, setIsRewriting] = useState(false)
 
   const extraImages = recipe.extraImages || []
   const hasAnyRef = Boolean(
@@ -137,6 +153,34 @@ function StudioPage() {
     window.addEventListener('paste', onPaste)
     return () => window.removeEventListener('paste', onPaste)
   })
+
+  const handleRewritePrompt = async () => {
+    if (!apiConfig.chatProviderId) {
+      toast.error('请先在设定页选择一个「文字模型」供应商')
+      return
+    }
+    setIsRewriting(true)
+    try {
+      const refs = [
+        recipe.portrait && (recipe.portrait.原图 || recipe.portrait.缩略图),
+        recipe.costume && (recipe.costume.预览图 || recipe.costume.原图 || recipe.costume.缩略图),
+        recipe.pose && (recipe.pose.原图 || recipe.pose.缩略图),
+        ...(recipe.extraImages || []).map((x) => x.url),
+      ].filter(Boolean) as string[]
+      const text = await rewritePromptWithChat({
+        config: apiConfig,
+        providerId: apiConfig.chatProviderId,
+        prompt,
+        images: refs,
+      })
+      setCustomPrompt(text)
+      toast.success('提示词已扩写')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '扩写失败')
+    } finally {
+      setIsRewriting(false)
+    }
+  }
 
   const handleRandom = async () => {
     const [posesRes, costumes, portraits] = await Promise.all([
@@ -197,7 +241,9 @@ function StudioPage() {
           <Button variant="outline" size="sm" asChild>
             <Link to="/settings">
               <KeyRoundIcon className="size-4" />
-              {providerCfg.apiKey ? `${providerMeta.shortName} 已就绪` : '配置 API Key'}
+              {resolvedProvider && (resolvedProvider.apiKey || resolvedProvider.authMode !== 'apiKey')
+                ? `${resolvedProvider.shortName} 已就绪`
+                : '配置 API Key'}
             </Link>
           </Button>
         }
@@ -456,17 +502,15 @@ function StudioPage() {
             }
           >
             <Field label="接口协议">
-              <Select
-                value={activeProvider}
-                onValueChange={(v) => updateApiConfig({ activeProvider: v as ImageProviderId })}
-              >
+              <Select value={activeProvider} onValueChange={(v) => setActiveProvider(v)}>
                 <SelectTrigger className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {PROVIDER_LIST.map((pid) => (
-                    <SelectItem key={pid} value={pid}>
-                      {PROVIDER_META[pid].name}
+                  {providerOptions.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name}
+                      {p.isBuiltin ? '' : '（自订）'}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -475,14 +519,14 @@ function StudioPage() {
 
             <Field label="模型 ID">
               <Select
-                value={providerCfg.model}
-                onValueChange={(v) => updateProviderConfig(activeProvider, { model: v })}
+                value={currentModel}
+                onValueChange={(v) => updateActiveProviderConfig({ model: v })}
               >
                 <SelectTrigger className="w-full font-mono text-xs">
-                  <SelectValue />
+                  <SelectValue placeholder="请选择模型" />
                 </SelectTrigger>
                 <SelectContent>
-                  {providerMeta.models.map((m) => (
+                  {modelOptions.map((m) => (
                     <SelectItem key={m.value} value={m.value} className="font-mono text-xs">
                       {m.label}
                     </SelectItem>
@@ -491,13 +535,11 @@ function StudioPage() {
               </Select>
             </Field>
 
-            {providerCfg.model === 'custom' && (
+            {builtinMeta && currentModel === 'custom' && (
               <Field label="自定义模型 ID">
                 <Input
-                  value={providerCfg.customModel}
-                  onChange={(e) =>
-                    updateProviderConfig(activeProvider, { customModel: e.target.value })
-                  }
+                  value={builtinCfg?.customModel || ''}
+                  onChange={(e) => updateActiveProviderConfig({ customModel: e.target.value })}
                   placeholder="输入模型 ID"
                   className="bg-background font-mono text-xs"
                 />
@@ -525,7 +567,7 @@ function StudioPage() {
             {/* 展开的高级协议专属参数 */}
             {showAdvanced && (
               <>
-                {activeProvider === 'gemini' && (
+                {resolvedProvider?.protocol === 'gemini_native' && (
                   <>
                     <Field label="Gemini 协议模式">
                       <Select
@@ -582,7 +624,7 @@ function StudioPage() {
                   </>
                 )}
 
-                {activeProvider === 'gpt' && (
+                {resolvedProvider?.protocol === 'openai_images' && (
                   <>
                     <Field label="调用端点 (endpointMode)">
                       <Select
@@ -689,7 +731,7 @@ function StudioPage() {
                   </>
                 )}
 
-                {activeProvider === 'qwen' && (
+                {resolvedProvider?.protocol === 'dashscope' && (
                   <>
                     <Field label="输出尺寸 (size)">
                       <Select
@@ -729,7 +771,7 @@ function StudioPage() {
                   </>
                 )}
 
-                {activeProvider === 'doubao' && (
+                {resolvedProvider?.protocol === 'ark' && (
                   <>
                     <Field label="输出尺寸 (size)">
                       <Select
@@ -791,6 +833,105 @@ function StudioPage() {
                   </>
                 )}
 
+                {resolvedProvider?.protocol === 'minimax' && (
+                  <>
+                    <Field label="参考图模式 (subject_reference)">
+                      <Select
+                        value={apiConfig.minimaxParams.referenceMode}
+                        onValueChange={(v) =>
+                          updateMinimaxParams({ referenceMode: v as MinimaxParams['referenceMode'] })
+                        }
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="portrait">仅人像参考（推荐，官方限制 1 张）</SelectItem>
+                          <SelectItem value="first">第一张参考图</SelectItem>
+                          <SelectItem value="stitch">三合一拼图（多图压缩为 1 张）</SelectItem>
+                          <SelectItem value="none">纯文生图（不带参考图）</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                    <Field label="宽高比 (aspect_ratio)">
+                      <Select
+                        value={apiConfig.minimaxParams.aspectRatio}
+                        onValueChange={(v) =>
+                          updateMinimaxParams({ aspectRatio: v as MinimaxParams['aspectRatio'] })
+                        }
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="3:4">3:4 (864×1152)</SelectItem>
+                          <SelectItem value="9:16">9:16 (720×1280)</SelectItem>
+                          <SelectItem value="2:3">2:3 (832×1248)</SelectItem>
+                          <SelectItem value="1:1">1:1 (1024×1024)</SelectItem>
+                          <SelectItem value="4:3">4:3 (1152×864)</SelectItem>
+                          <SelectItem value="3:2">3:2 (1248×832)</SelectItem>
+                          <SelectItem value="16:9">16:9 (1280×720)</SelectItem>
+                          <SelectItem value="21:9">21:9 (1344×576)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                    <Field label="返回格式 (response_format)">
+                      <Select
+                        value={apiConfig.minimaxParams.responseFormat}
+                        onValueChange={(v) =>
+                          updateMinimaxParams({
+                            responseFormat: v as MinimaxParams['responseFormat'],
+                          })
+                        }
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="url">url（24 小时有效）</SelectItem>
+                          <SelectItem value="base64">base64</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                    <Field label="提示词智能优化 (prompt_optimizer)">
+                      <div className="flex h-9 items-center justify-between rounded-xl border bg-background px-3">
+                        <span className="text-xs text-muted-foreground">
+                          {apiConfig.minimaxParams.promptOptimizer ? '开启' : '关闭'}
+                        </span>
+                        <Switch
+                          checked={apiConfig.minimaxParams.promptOptimizer}
+                          onCheckedChange={(v) => updateMinimaxParams({ promptOptimizer: v })}
+                        />
+                      </div>
+                    </Field>
+                    <Field label="出图数量 (n)">
+                      <Select
+                        value={String(apiConfig.minimaxParams.n)}
+                        onValueChange={(v) => updateMinimaxParams({ n: Number(v) })}
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {[1, 2, 3, 4].map((k) => (
+                            <SelectItem key={k} value={String(k)}>
+                              {k} 张
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                    <Field label="随机种子 (seed，留空为随机)">
+                      <Input
+                        value={apiConfig.minimaxParams.seed}
+                        onChange={(e) => updateMinimaxParams({ seed: e.target.value })}
+                        placeholder="例如 123456"
+                        className="bg-background font-mono text-xs"
+                      />
+                    </Field>
+                  </>
+                )}
+
                 <Field label="图片传参方式">
                   <Select
                     value={apiConfig.imagePassMode}
@@ -830,6 +971,19 @@ function StudioPage() {
                 <Button variant="ghost" size="sm" onClick={() => setCustomPrompt(null)}>
                   <RotateCcwIcon className="size-3.5" />
                   重置
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={isRewriting}
+                  onClick={() => void handleRewritePrompt()}
+                >
+                  {isRewriting ? (
+                    <LoaderCircleIcon className="size-3.5 animate-spin" />
+                  ) : (
+                    <SparklesIcon className="size-3.5" />
+                  )}
+                  AI 扩写
                 </Button>
                 <Button
                   variant="outline"

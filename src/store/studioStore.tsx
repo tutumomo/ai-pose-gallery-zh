@@ -7,15 +7,18 @@ import {
   PROVIDER_META,
   stitchRecipeCanvas,
 } from '@/services/aiGenerator'
+import { isBuiltinProviderId, resolveProvider } from '@/services/providerRegistry'
 import type {
   ApiConfig,
+  BuiltinProviderId,
   CostumeItem,
+  CustomProvider,
   DoubaoParams,
   ExtraReferenceImage,
   GeminiParams,
   GenerationHistoryItem,
   GptParams,
-  ImageProviderId,
+  MinimaxParams,
   PortraitItem,
   PoseItem,
   ProviderEndpointConfig,
@@ -58,6 +61,12 @@ const DEFAULT_API_CONFIG: ApiConfig = {
       model: PROVIDER_META.doubao.models[0].value,
       customModel: '',
     },
+    minimax: {
+      baseUrl: PROVIDER_META.minimax.defaultBaseUrl,
+      apiKey: '',
+      model: PROVIDER_META.minimax.models[0].value,
+      customModel: '',
+    },
   },
   gptParams: {
     endpointMode: 'images_edits_json',
@@ -86,6 +95,16 @@ const DEFAULT_API_CONFIG: ApiConfig = {
     watermark: false,
     responseFormat: 'b64_json',
   },
+  minimaxParams: {
+    referenceMode: 'portrait',
+    aspectRatio: '3:4',
+    responseFormat: 'url',
+    promptOptimizer: true,
+    n: 1,
+    seed: '',
+  },
+  customProviders: [],
+  chatProviderId: null,
 }
 
 function mergeStoredConfig(raw: unknown): ApiConfig {
@@ -99,11 +118,15 @@ function mergeStoredConfig(raw: unknown): ApiConfig {
       gpt: { ...DEFAULT_API_CONFIG.providers.gpt, ...obj.providers?.gpt },
       qwen: { ...DEFAULT_API_CONFIG.providers.qwen, ...obj.providers?.qwen },
       doubao: { ...DEFAULT_API_CONFIG.providers.doubao, ...obj.providers?.doubao },
+      minimax: { ...DEFAULT_API_CONFIG.providers.minimax, ...obj.providers?.minimax },
     },
     gptParams: { ...DEFAULT_API_CONFIG.gptParams, ...obj.gptParams },
     geminiParams: { ...DEFAULT_API_CONFIG.geminiParams, ...obj.geminiParams },
     qwenParams: { ...DEFAULT_API_CONFIG.qwenParams, ...obj.qwenParams },
     doubaoParams: { ...DEFAULT_API_CONFIG.doubaoParams, ...obj.doubaoParams },
+    minimaxParams: { ...DEFAULT_API_CONFIG.minimaxParams, ...obj.minimaxParams },
+    customProviders: Array.isArray(obj.customProviders) ? obj.customProviders : [],
+    chatProviderId: obj.chatProviderId ?? null,
   }
 }
 
@@ -132,11 +155,18 @@ interface StudioContextValue {
   clearRecipe: () => void
   randomizeRecipe: (pools: { portraits?: PortraitItem[]; costumes?: CostumeItem[]; poses?: PoseItem[] }) => void
   updateApiConfig: (patch: Partial<ApiConfig>) => void
-  updateProviderConfig: (provider: ImageProviderId, patch: Partial<ProviderEndpointConfig>) => void
+  updateProviderConfig: (provider: BuiltinProviderId, patch: Partial<ProviderEndpointConfig>) => void
+  setActiveProvider: (id: string) => void
+  setChatProvider: (id: string | null) => void
+  updateActiveProviderConfig: (patch: Partial<ProviderEndpointConfig>) => void
+  addCustomProvider: (provider: CustomProvider) => void
+  updateCustomProvider: (id: string, patch: Partial<CustomProvider>) => void
+  removeCustomProvider: (id: string) => void
   updateGptParams: (patch: Partial<GptParams>) => void
   updateGeminiParams: (patch: Partial<GeminiParams>) => void
   updateQwenParams: (patch: Partial<QwenParams>) => void
   updateDoubaoParams: (patch: Partial<DoubaoParams>) => void
+  updateMinimaxParams: (patch: Partial<MinimaxParams>) => void
   addHistory: (item: Omit<GenerationHistoryItem, 'id' | 'createdAt'>) => void
   removeHistoryItem: (id: string) => void
   clearHistory: () => void
@@ -322,7 +352,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     setApiConfig((prev) => ({ ...prev, ...patch }))
   }
 
-  const updateProviderConfig = (provider: ImageProviderId, patch: Partial<ProviderEndpointConfig>) => {
+  const updateProviderConfig = (provider: BuiltinProviderId, patch: Partial<ProviderEndpointConfig>) => {
     setApiConfig((prev) => ({
       ...prev,
       providers: {
@@ -333,6 +363,73 @@ export function StudioProvider({ children }: { children: ReactNode }) {
         },
       },
     }))
+  }
+
+  const setActiveProvider = (id: string) => {
+    setApiConfig((prev) => ({ ...prev, activeProvider: id }))
+  }
+
+  const setChatProvider = (id: string | null) => {
+    setApiConfig((prev) => ({ ...prev, chatProviderId: id }))
+  }
+
+  // 內建 / 自訂共用：把 UI 的 baseUrl / apiKey / model / customModel 寫進正確位置
+  const updateActiveProviderConfig = (patch: Partial<ProviderEndpointConfig>) => {
+    setApiConfig((prev) => {
+      const id = prev.activeProvider
+      if (isBuiltinProviderId(id)) {
+        return {
+          ...prev,
+          providers: {
+            ...prev.providers,
+            [id]: { ...prev.providers[id], ...patch },
+          },
+        }
+      }
+      const custom = prev.customProviders.find((p) => p.id === id)
+      if (!custom) return prev
+      const nextModel =
+        patch.model !== undefined
+          ? patch.model === 'custom'
+            ? patch.customModel ?? custom.model
+            : patch.model
+          : custom.model
+      return {
+        ...prev,
+        customProviders: prev.customProviders.map((p) =>
+          p.id === id
+            ? {
+                ...p,
+                baseUrl: patch.baseUrl ?? p.baseUrl,
+                apiKey: patch.apiKey ?? p.apiKey,
+                model: patch.customModel !== undefined ? patch.customModel : nextModel,
+              }
+            : p
+        ),
+      }
+    })
+  }
+
+  const addCustomProvider = (provider: CustomProvider) => {
+    setApiConfig((prev) => ({ ...prev, customProviders: [...prev.customProviders, provider] }))
+    toast.success(`已添加供应商：${provider.name || provider.id}`)
+  }
+
+  const updateCustomProvider = (id: string, patch: Partial<CustomProvider>) => {
+    setApiConfig((prev) => ({
+      ...prev,
+      customProviders: prev.customProviders.map((p) => (p.id === id ? { ...p, ...patch } : p)),
+    }))
+  }
+
+  const removeCustomProvider = (id: string) => {
+    setApiConfig((prev) => ({
+      ...prev,
+      activeProvider: prev.activeProvider === id ? 'minimax' : prev.activeProvider,
+      chatProviderId: prev.chatProviderId === id ? null : prev.chatProviderId,
+      customProviders: prev.customProviders.filter((p) => p.id !== id),
+    }))
+    toast.success('已删除该供应商')
   }
 
   const updateGptParams = (patch: Partial<GptParams>) => {
@@ -349,6 +446,10 @@ export function StudioProvider({ children }: { children: ReactNode }) {
 
   const updateDoubaoParams = (patch: Partial<DoubaoParams>) => {
     setApiConfig((prev) => ({ ...prev, doubaoParams: { ...prev.doubaoParams, ...patch } }))
+  }
+
+  const updateMinimaxParams = (patch: Partial<MinimaxParams>) => {
+    setApiConfig((prev) => ({ ...prev, minimaxParams: { ...prev.minimaxParams, ...patch } }))
   }
 
   const addHistory = (item: Omit<GenerationHistoryItem, 'id' | 'createdAt'>) => {
@@ -386,8 +487,8 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     if (isGeneratingRef.current) return
     const recipeSnapshot = recipe
     const configSnapshot = apiConfig
-    const pCfg = configSnapshot.providers[configSnapshot.activeProvider]
-    const modelName = pCfg.model === 'custom' ? pCfg.customModel || 'custom' : pCfg.model
+    const resolved = resolveProvider(configSnapshot, configSnapshot.activeProvider)
+    const modelName = resolved?.model || '未命名模型'
     const finalPrompt =
       overridePrompt ?? customPrompt ?? buildRecipePrompt(recipeSnapshot, configSnapshot.stylePreset)
 
@@ -454,10 +555,17 @@ export function StudioProvider({ children }: { children: ReactNode }) {
         randomizeRecipe,
         updateApiConfig,
         updateProviderConfig,
+        setActiveProvider,
+        setChatProvider,
+        updateActiveProviderConfig,
+        addCustomProvider,
+        updateCustomProvider,
+        removeCustomProvider,
         updateGptParams,
         updateGeminiParams,
         updateQwenParams,
         updateDoubaoParams,
+        updateMinimaxParams,
         addHistory,
         removeHistoryItem,
         clearHistory,

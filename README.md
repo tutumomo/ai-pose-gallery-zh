@@ -31,7 +31,7 @@
 3. **三合一 AI 角色合成工作台** —— 基于 **React 19 + Tailwind CSS 4 + TypeScript 7 + shadcn/ui + TanStack Router** 构建的响应式多页面应用（兼容 PC / 平板 / 手机）：
    - 从三大图库任意挑选 **人像 + 服装 + 姿势** 组合配方，或一键随机捏人；
    - 支持拖拽 / 剪贴板粘贴（`Cmd+V` / `Ctrl+V`） / URL 添加多张自定义附加参考图；
-   - 内置 **4 大主流 AI 图像协议直连**（Gemini、OpenAI GPT、阿里千问 Qwen、字节豆包 Seedream），支持直接传递公网图片 URL 或 Base64，生成记录通过 **IndexedDB** 本地持久化保存。
+   - 内置 **5 大主流 AI 图像协议直连**（Gemini、OpenAI GPT、阿里千问 Qwen、字节豆包 Seedream、MiniMax 海螺），支持直接传递公网图片 URL 或 Base64，生成记录通过 **IndexedDB** 本地持久化保存。
 
 ---
 
@@ -52,6 +52,9 @@
   - **OpenAI GPT Image**：`gpt-image-1.5`、`gpt-image-1`、`gpt-image-1-mini`（支持 `/v1/images/edits` JSON URL 直传 / Multipart 上传、尺寸、质量、背景透明度）
   - **阿里千问 Qwen-Image**：`qwen-image-2.0-pro`、`qwen-image-2.0`、`qwen-image-edit-max`（支持 `multimodal-generation` 多图参考输入、智能改写 `prompt_extend`、水印开关）
   - **字节豆包 Seedream**：`doubao-seedream-5-0-260128`、`doubao-seedream-4-5-251128`、`doubao-seedream-4-0-250828`（支持多图融合 `image: [...]`、2K/4K 分辨率）
+  - **MiniMax 海螺**：`image-01`、`image-01-live`（`/v1/image_generation`，支持 `subject_reference` 单张角色参考、`aspect_ratio`、`prompt_optimizer`、`seed`、`n`、`url/base64` 返回；注意官方每次仅接受 1 张参考图，服装 / 姿势需靠提示词描述）
+- **自订第三方供应商（v2.2 新增）**：设定页可分「内置 / 自订」两个分页。自订供应商可自由填 Base URL、模型 ID、用途（生图 / 文字）与认证方式，协议支持 `openai_images`、`openai_chat`（含 Ollama Cloud 等 OpenAI 兼容服务）、`gemini_native`、`dashscope`、`ark`、`minimax`，以及完全自订的 `custom_json`。文字用途的供应商可作为「提示词扩写」后端，合成台会出现「AI 扩写」按钮。
+- **OAuth 登入（v2.2 新增）**：自订供应商支持 OAuth 授权码 + PKCE（弹窗回调 `/oauth/callback`）与 Device Code 两种流程；token 存在浏览器 IndexedDB，临近过期自动用 refresh_token 续期。
 - **跨页面后台生图 & IndexedDB 历史记录**：切换页面不会中断正在进行的生图请求；生成结果自动存入浏览器 IndexedDB（避免 `localStorage` 容量限制），支持复用提示词与原图下载。
 
 ---
@@ -100,6 +103,72 @@
 ├── skills/                 # Claude Code / Agent 姿势检索技能包
 └── README.md
 ```
+
+---
+
+## 自订供应商与 OAuth
+
+### 1. 新增自订供应商
+
+设定页 →「自订供应商」→「新增供应商」，填：
+
+| 字段 | 说明 |
+| --- | --- |
+| 名称 / 用途 | 用途选「生图」或「文字模型（提示词扩写）」 |
+| 请求协议 | 见下表，决定请求怎么发 |
+| Base URL | 例如 `https://ollama.com/v1`、`https://api.minimax.io` |
+| 模型 ID | 逗号分隔，第一项为默认 |
+| 认证方式 | API Key / OAuth PKCE / OAuth Device Code |
+
+协议对照：
+
+| 协议 | 打哪个端点 |
+| --- | --- |
+| `openai_images` | `/v1/images/edits`、`/v1/images/generations`、`/v1/responses` |
+| `openai_chat` | `/v1/chat/completions`（Ollama Cloud、各类中转站） |
+| `gemini_native` | `:generateContent` |
+| `dashscope` | `/api/v1/services/aigc/multimodal-generation/generation` |
+| `ark` | `/api/v3/images/generations` |
+| `minimax` | `/v1/image_generation` |
+| `custom_json` | 你自己填的 URL + body 模板 |
+
+### 2. `custom_json` 模板语法
+
+`请求 Body` 里可用占位符：
+
+| 占位符 | 替换成 |
+| --- | --- |
+| `"{{prompt}}"` | 提示词（JSON 编码，含引号） |
+| `"{{model}}"` | 模型 ID |
+| `"{{image_urls}}"` | 参考图数组（输出真正的 JSON 数组） |
+| `"{{image_url}}"` | 第一张参考图 |
+| `{{n}}` | 出图数量（数字，不带引号） |
+| `"{{aspect_ratio}}"` | 宽高比 |
+
+取图路径用点 + 方括号，例如 `data[0].url`、`data.image_urls[0]`；取到的值以 `http` 开头视为 URL，否则按 base64 组成 data URL。额外 Header 每行一个 `Key: Value`。
+
+### 3. OAuth 服务端换 token（可选但推荐）
+
+纯前端换 token 常被 CORS 挡，此时把「Token 兑换位置」设为 **服务端**，并在 Cloudflare 侧配置：
+
+```bash
+# 1) 存入 client_secret（名称与供应商表单里的「Client Secret 環境變數名」一致）
+npx wrangler secret put GITHUB_OAUTH_SECRET --name ai-pose-gallery-zh
+
+# 2) 设定 token 主机白名单（逗号分隔），否则 /api/oauth/token 直接回 403
+npx wrangler secret put OAUTH_TOKEN_HOSTS --name ai-pose-gallery-zh
+# 例：github.com,oauth2.googleapis.com
+```
+
+本地开发时把这些变量写进 `.env`（`OAUTH_TOKEN_HOSTS`、`GITHUB_OAUTH_SECRET`），`vite.config.ts` 里的 `/api/oauth/token` 中间件会读取同一份配置。
+
+> ⚠️ `OAUTH_TOKEN_HOSTS` 是安全边界：它决定后端允许带 secret 去请求哪些主机。**留空等于完全拒绝**，请只填你信任的 token 端点域名。
+
+### 4. 已知限制
+
+- OAuth 只对「有开放第三方 OAuth」的服务有效；MiniMax、豆包、百炼、Ollama Cloud 都只发 API Key。
+- 多数厂商需要你自己注册 OAuth App 拿 `client_id`（可配 `client_secret`）。
+- OAuth token 与 API Key 一样，只存在本机浏览器 IndexedDB，不会上传。
 
 ---
 

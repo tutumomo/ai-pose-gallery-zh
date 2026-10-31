@@ -66,7 +66,75 @@ export interface RecipeState {
   extraImages?: ExtraReferenceImage[]
 }
 
-export type ImageProviderId = 'gemini' | 'gpt' | 'qwen' | 'doubao'
+export type BuiltinProviderId = 'gemini' | 'gpt' | 'qwen' | 'doubao' | 'minimax'
+/** 內建供應商 id；自訂供應商使用任意字串 id */
+export type ImageProviderId = BuiltinProviderId
+
+/** 請求協議：決定 generateCharacterImage 走哪條分支，與「是哪一家」解耦 */
+export type ProviderProtocol =
+  | 'gemini_native'
+  | 'openai_images'
+  | 'openai_chat'
+  | 'dashscope'
+  | 'ark'
+  | 'minimax'
+  | 'custom_json'
+
+export type ProviderAuthMode = 'apiKey' | 'oauth_pkce' | 'oauth_device'
+
+export type ProviderPurpose = 'image' | 'chat'
+
+/** custom_json 協議：使用者自填請求模板 */
+export interface CustomJsonTemplate {
+  /** JSON 字串，可用 "{{prompt}}" "{{model}}" "{{image_urls}}" "{{image_url}}" "{{n}}" "{{aspect_ratio}}" 佔位符 */
+  bodyTemplate: string
+  /** 取圖路徑，如 data.image_urls[0] / data[0].url */
+  imagePath: string
+  /** 每行一個 Key: Value */
+  extraHeaders: string
+}
+
+export interface CustomProviderOAuth {
+  flow: 'pkce' | 'device'
+  authorizeUrl: string
+  tokenUrl: string
+  deviceCodeUrl: string
+  clientId: string
+  scopes: string
+  /** 附加在授權 URL 的 query，如 audience=xxx&prompt=consent */
+  extraAuthParams: string
+  tokenAuthStyle: 'body' | 'basic'
+  /** browser = 前端直接換 token（多數廠商會被 CORS 擋）；server = 走 /api/oauth/token 由後端帶 secret */
+  tokenExchange: 'browser' | 'server'
+  /** server 模式下 Worker 環境變數名稱（存 client_secret） */
+  clientSecretEnv: string
+}
+
+export interface CustomProvider {
+  id: string
+  name: string
+  protocol: ProviderProtocol
+  baseUrl: string
+  /** 可用模型 ID 清單，第一項為預設 */
+  models: string[]
+  /** 已選模型；空字串表示用 models[0] */
+  model: string
+  purpose: ProviderPurpose
+  authMode: ProviderAuthMode
+  apiKey: string
+  oauth?: CustomProviderOAuth
+  template?: CustomJsonTemplate
+  createdAt: number
+}
+
+export interface OAuthTokenRecord {
+  providerId: string
+  accessToken: string
+  refreshToken?: string
+  tokenType: string
+  /** epoch ms；0 表示不設到期 */
+  expiresAt: number
+}
 
 export interface ProviderEndpointConfig {
   baseUrl: string
@@ -108,8 +176,19 @@ export interface DoubaoParams {
   responseFormat: 'b64_json' | 'url'
 }
 
+export interface MinimaxParams {
+  // MiniMax image-01 单次仅接受 1 张 subject_reference，需要自行决定送哪张
+  referenceMode: 'portrait' | 'stitch' | 'first' | 'none'
+  aspectRatio: '1:1' | '3:4' | '4:3' | '9:16' | '16:9' | '2:3' | '3:2' | '21:9'
+  responseFormat: 'url' | 'base64'
+  promptOptimizer: boolean
+  n: number
+  seed: string
+}
+
 export interface ApiConfig {
-  activeProvider: ImageProviderId
+  /** 內建 id 或自訂供應商 id */
+  activeProvider: string
   imagePassMode: ImagePassMode
   useProxy: boolean
   stylePreset: string
@@ -119,12 +198,16 @@ export interface ApiConfig {
   geminiParams: GeminiParams
   qwenParams: QwenParams
   doubaoParams: DoubaoParams
+  minimaxParams: MinimaxParams
+  customProviders: CustomProvider[]
+  /** 提示詞擴寫（purpose: 'chat'）使用的供應商 id */
+  chatProviderId: string | null
 }
 
 export interface GenerationHistoryItem {
   id: string
   createdAt: number
-  provider: ImageProviderId
+  provider: string
   model: string
   prompt: string
   imageUrl: string

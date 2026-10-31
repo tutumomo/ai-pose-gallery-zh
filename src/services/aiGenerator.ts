@@ -1,82 +1,14 @@
-import type { ApiConfig, ImageProviderId, RecipeState } from '@/types/gallery'
+import { getAccessToken } from '@/services/oauth'
+import {
+  PROVIDER_META,
+  type ProviderModelOption,
+  type ResolvedProvider,
+  resolveProvider,
+} from '@/services/providerRegistry'
+import type { ApiConfig, RecipeState } from '@/types/gallery'
 
-export interface ProviderModelOption {
-  value: string
-  label: string
-}
-
-export const PROVIDER_META: Record<
-  ImageProviderId,
-  {
-    id: ImageProviderId
-    name: string
-    shortName: string
-    defaultBaseUrl: string
-    docUrl: string
-    models: ProviderModelOption[]
-  }
-> = {
-  gemini: {
-    id: 'gemini',
-    name: 'Google Gemini',
-    shortName: 'Gemini',
-    defaultBaseUrl: 'https://generativelanguage.googleapis.com',
-    docUrl: 'https://ai.google.dev/gemini-api/docs/image-generation',
-    models: [
-      { value: 'gemini-3.1-flash-image-preview', label: 'gemini-3.1-flash-image-preview' },
-      { value: 'gemini-3-pro-image-preview', label: 'gemini-3-pro-image-preview' },
-      { value: 'gemini-2.5-flash-image', label: 'gemini-2.5-flash-image' },
-      { value: 'gemini-2.5-flash-image-preview', label: 'gemini-2.5-flash-image-preview' },
-      { value: 'custom', label: '自定义模型 ID' },
-    ],
-  },
-  gpt: {
-    id: 'gpt',
-    name: 'OpenAI GPT Image',
-    shortName: 'GPT',
-    defaultBaseUrl: 'https://api.openai.com/v1',
-    docUrl: 'https://platform.openai.com/docs/guides/image-generation',
-    models: [
-      { value: 'gpt-image-2.5', label: 'gpt-image-2.5' },
-      { value: 'gpt-image-2.5-sunburst', label: 'gpt-image-2.5-sunburst' },
-      { value: 'gpt-image-2.5-flare', label: 'gpt-image-2.5-flare' },
-      { value: 'gpt-image-2', label: 'gpt-image-2' },
-      { value: 'gpt-image-1.5', label: 'gpt-image-1.5' },
-      { value: 'gpt-image-1', label: 'gpt-image-1' },
-      { value: 'custom', label: '自定义模型 ID' },
-    ],
-  },
-  qwen: {
-    id: 'qwen',
-    name: '阿里云百炼 Qwen',
-    shortName: 'Qwen',
-    defaultBaseUrl: 'https://dashscope.aliyuncs.com',
-    docUrl: 'https://help.aliyun.com/zh/model-studio/qwen-image-edit-api',
-    models: [
-      { value: 'qwen-image-3.0-pro', label: 'qwen-image-3.0-pro' },
-      { value: 'qwen-image-2.1-pro', label: 'qwen-image-2.1-pro' },
-      { value: 'qwen-image-2.1-turbo', label: 'qwen-image-2.1-turbo' },
-      { value: 'qwen-image-2.0-pro', label: 'qwen-image-2.0-pro' },
-      { value: 'qwen-image-edit-plus', label: 'qwen-image-edit-plus' },
-      { value: 'custom', label: '自定义模型 ID' },
-    ],
-  },
-  doubao: {
-    id: 'doubao',
-    name: '字节火山方舟 Doubao',
-    shortName: 'Doubao',
-    defaultBaseUrl: 'https://ark.cn-beijing.volces.com',
-    docUrl: 'https://www.volcengine.com/docs/82379/1541523',
-    models: [
-      { value: 'doubao-seedream-5-0', label: 'doubao-seedream-5-0' },
-      { value: 'doubao-seedream-5-0-lite', label: 'doubao-seedream-5-0-lite' },
-      { value: 'doubao-seedream-4-5-251128', label: 'doubao-seedream-4-5-251128' },
-      { value: 'doubao-seedream-4-0-250828', label: 'doubao-seedream-4-0-250828' },
-      { value: 'doubao-seededit-3-0-i2i-250628', label: 'doubao-seededit-3-0-i2i-250628' },
-      { value: 'custom', label: '自定义模型 ID / Endpoint' },
-    ],
-  },
-}
+export { PROVIDER_META }
+export type { ProviderModelOption }
 
 export const STYLE_PRESETS: Record<string, { label: string; prompt: string }> = {
   none: {
@@ -353,6 +285,10 @@ async function smartFetch(
 }
 
 function extractUniversalImage(json: any): string | null {
+  // 0. MiniMax image_generation: data.image_urls[] / data.image_base64[]
+  if (json?.data?.image_urls?.[0]) return json.data.image_urls[0]
+  if (json?.data?.image_base64?.[0]) return `data:image/png;base64,${json.data.image_base64[0]}`
+
   // 1. OpenAI / Doubao Seedream standard: data[0].b64_json or data[0].url
   if (json?.data?.[0]?.b64_json) return `data:image/png;base64,${json.data[0].b64_json}`
   if (json?.data?.[0]?.url) return json.data[0].url
@@ -400,18 +336,92 @@ function extractUniversalImage(json: any): string | null {
   return null
 }
 
+
+function joinV1(baseUrl: string): string {
+  return baseUrl.endsWith('/v1') ? baseUrl : `${baseUrl}/v1`
+}
+
+/** 解析 data.image_urls[0] / data[0].url 這類路徑 */
+function parsePath(root: unknown, path: string): unknown {
+  if (!path.trim()) return undefined
+  const tokens = path.replace(/\[(\d+)\]/g, '.$1').split('.').filter(Boolean)
+  let cur: any = root
+  for (const token of tokens) {
+    if (cur == null) return undefined
+    cur = cur[token]
+  }
+  return cur
+}
+
+/**
+ * 自訂模板渲染：
+ * - `"{{key}}"`（帶引號）→ 整體換成 JSON 編碼值；陣列變數輸出真正的 JSON 陣列
+ * - `{{key}}`（不帶引號）→ 直接內插字串（數字變數原樣輸出）
+ */
+export function renderBodyTemplateSafe(
+  template: string,
+  vars: Record<string, string | number | string[]>
+): string {
+  const quoted = template.replace(/"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}"/g, (_m, key: string) => {
+    const k = key.trim()
+    if (!(k in vars)) return '""'
+    const v = vars[k]
+    if (Array.isArray(v)) return JSON.stringify(v)
+    if (typeof v === 'number') return String(v)
+    return JSON.stringify(v)
+  })
+  return quoted.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_m, key: string) => {
+    const k = key.trim()
+    if (!(k in vars)) return ''
+    const v = vars[k]
+    return Array.isArray(v) ? JSON.stringify(v) : String(v)
+  })
+}
+
+function parseExtraHeaders(raw: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const line of (raw || '').split('\n')) {
+    const idx = line.indexOf(':')
+    if (idx <= 0) continue
+    const key = line.slice(0, idx).trim()
+    const value = line.slice(idx + 1).trim()
+    if (key) out[key] = value
+  }
+  return out
+}
+
+async function resolveAuth(p: ResolvedProvider): Promise<string> {
+  if (p.authMode === 'apiKey') return p.apiKey
+  const token = await getAccessToken(p)
+  return token || ''
+}
+
+export interface GenerateImageResult {
+  imageUrl: string
+  modelUsed: string
+  providerUsed: string
+}
+
 export async function generateCharacterImage(params: {
   recipe: RecipeState
   prompt: string
   config: ApiConfig
-}): Promise<{ imageUrl: string; modelUsed: string; providerUsed: ImageProviderId }> {
+}): Promise<GenerateImageResult> {
   const { recipe, prompt, config } = params
-  const provider = config.activeProvider
-  const pCfg = config.providers[provider]
-  const apiKey = pCfg.apiKey.trim()
+  const providerId = config.activeProvider
+  const p = resolveProvider(config, providerId)
+  if (!p) throw new Error(`找不到供应商配置：${providerId}`)
+  if (p.purpose === 'chat') {
+    throw new Error(`「${p.name}」被标记为文字模型，不能用于生图`)
+  }
 
-  if (!apiKey) {
-    throw new Error(`请先配置 ${PROVIDER_META[provider].name} 的 API Key`)
+  const auth = await resolveAuth(p)
+  if (!auth) {
+    throw new Error(
+      p.authMode === 'apiKey'
+        ? `请先配置 ${p.name} 的 API Key`
+        : `请先为 ${p.name} 完成 OAuth 授权`
+    )
   }
 
   const rawSources = [
@@ -425,22 +435,17 @@ export async function generateCharacterImage(params: {
     throw new Error('请先选择或上传至少 1 张参考图')
   }
 
-  const model = pCfg.model === 'custom' ? pCfg.customModel.trim() : pCfg.model
+  const model = p.model
   if (!model) {
     throw new Error('请选择或填写有效的模型名称')
   }
 
-  const baseUrl = (pCfg.baseUrl.trim() || PROVIDER_META[provider].defaultBaseUrl).replace(/\/+$/, '')
-
-  // 判断当前请求是否需要转换为本地 Base64：
-  // 1) 用户显式选择了 base64 模式
-  // 2) 或者勾选了「附带三合一 Canvas 合成图」（本地动态绘制无公网 URL）
-  // 3) 或者使用 Gemini Native 原生接口 / OpenAI multipart/form-data 模式
+  const baseUrl = p.baseUrl.replace(/\/+$/, '')
   const needBase64 =
     config.imagePassMode === 'base64' ||
     config.sendStitchedSheet ||
-    (provider === 'gemini' && config.geminiParams.endpointMode === 'native') ||
-    (provider === 'gpt' && config.gptParams.endpointMode === 'images_edits')
+    (p.protocol === 'gemini_native' && config.geminiParams.endpointMode === 'native') ||
+    (p.protocol === 'openai_images' && config.gptParams.endpointMode === 'images_edits')
 
   const imageRefs: string[] = needBase64
     ? await Promise.all(rawSources.map(srcToPngDataUrl))
@@ -453,276 +458,342 @@ export async function generateCharacterImage(params: {
   let res: Response
   let json: any
 
-  // =========================================================================
-  // 协议 1: OpenAI GPT Image (gpt-image-2.5 / gpt-image-2 / gpt-image-1.5 / 1)
-  // =========================================================================
-  if (provider === 'gpt') {
-    const g = config.gptParams
-    const v1 = baseUrl.endsWith('/v1') ? baseUrl : `${baseUrl}/v1`
+  switch (p.protocol) {
+    // =======================================================================
+    // 协议 1: OpenAI Images（/v1/images/*、/v1/responses、chat 中转）
+    // =======================================================================
+    case 'openai_images': {
+      const g = config.gptParams
+      const v1 = joinV1(baseUrl)
 
-    if (g.endpointMode === 'images_edits_json') {
-      // OpenAI 最新 /v1/images/edits JSON 协议：直接传 images: [{ image_url: "https://..." }]，无需上传文件流！
-      const payload: Record<string, any> = {
-        model,
-        prompt,
-        images: allImageRefs.map((ref) => ({ image_url: ref })),
+      if (g.endpointMode === 'images_edits_json') {
+        const payload: Record<string, any> = {
+          model,
+          prompt,
+          images: allImageRefs.map((ref) => ({ image_url: ref })),
+        }
+        if (g.size !== 'auto') payload.size = g.size
+        if (g.quality !== 'auto') payload.quality = g.quality
+        if (g.inputFidelity) payload.input_fidelity = g.inputFidelity
+        if (g.background !== 'auto') payload.background = g.background
+        if (g.outputFormat) payload.output_format = g.outputFormat
+        if (g.moderation !== 'auto') payload.moderation = g.moderation
+
+        res = await smartFetch(
+          `${v1}/images/edits`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth}` },
+            body: JSON.stringify(payload),
+          },
+          config.useProxy
+        )
+        json = await res.json()
+      } else if (g.endpointMode === 'images_edits') {
+        const fd = new FormData()
+        fd.append('model', model)
+        fd.append('prompt', prompt)
+        allImageRefs.forEach((du, i) => {
+          fd.append('image[]', dataUrlToBlob(du), `ref_${i + 1}.png`)
+        })
+        if (g.size !== 'auto') fd.append('size', g.size)
+        if (g.quality !== 'auto') fd.append('quality', g.quality)
+        if (g.inputFidelity) fd.append('input_fidelity', g.inputFidelity)
+        if (g.background !== 'auto') fd.append('background', g.background)
+        if (g.outputFormat) fd.append('output_format', g.outputFormat)
+        if (g.moderation !== 'auto') fd.append('moderation', g.moderation)
+
+        res = await smartFetch(
+          `${v1}/images/edits`,
+          { method: 'POST', headers: { Authorization: `Bearer ${auth}` }, body: fd },
+          config.useProxy
+        )
+        json = await res.json()
+      } else if (g.endpointMode === 'responses') {
+        const inputContent = [
+          ...allImageRefs.map((ref) => ({ type: 'input_image', image_url: ref })),
+          { type: 'input_text', text: prompt },
+        ]
+        const toolCfg: Record<string, any> = { type: 'image_generation' }
+        if (g.size !== 'auto') toolCfg.size = g.size
+        if (g.quality !== 'auto') toolCfg.quality = g.quality
+        if (g.background !== 'auto') toolCfg.background = g.background
+        if (g.inputFidelity) toolCfg.input_fidelity = g.inputFidelity
+        if (g.outputFormat) toolCfg.output_format = g.outputFormat
+
+        res = await smartFetch(
+          `${v1}/responses`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth}` },
+            body: JSON.stringify({
+              model,
+              input: [{ role: 'user', content: inputContent }],
+              tools: [toolCfg],
+            }),
+          },
+          config.useProxy
+        )
+        json = await res.json()
+      } else {
+        const content = [
+          { type: 'text', text: prompt },
+          ...allImageRefs.map((ref) => ({ type: 'image_url', image_url: { url: ref } })),
+        ]
+        res = await smartFetch(
+          `${v1}/chat/completions`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth}` },
+            body: JSON.stringify({
+              model,
+              messages: [{ role: 'user', content }],
+              modalities: ['text', 'image'],
+            }),
+          },
+          config.useProxy
+        )
+        json = await res.json()
       }
-      if (g.size !== 'auto') payload.size = g.size
-      if (g.quality !== 'auto') payload.quality = g.quality
-      if (g.inputFidelity) payload.input_fidelity = g.inputFidelity
-      if (g.background !== 'auto') payload.background = g.background
-      if (g.outputFormat) payload.output_format = g.outputFormat
-      if (g.moderation !== 'auto') payload.moderation = g.moderation
-
-      res = await smartFetch(
-        `${v1}/images/edits`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify(payload),
-        },
-        config.useProxy
-      )
-      json = await res.json()
-    } else if (g.endpointMode === 'images_edits') {
-      // 传统 /v1/images/edits (multipart/form-data 二进制文件上传)
-      const fd = new FormData()
-      fd.append('model', model)
-      fd.append('prompt', prompt)
-      allImageRefs.forEach((du, i) => {
-        fd.append('image[]', dataUrlToBlob(du), `ref_${i + 1}.png`)
-      })
-      if (g.size !== 'auto') fd.append('size', g.size)
-      if (g.quality !== 'auto') fd.append('quality', g.quality)
-      if (g.inputFidelity) fd.append('input_fidelity', g.inputFidelity)
-      if (g.background !== 'auto') fd.append('background', g.background)
-      if (g.outputFormat) fd.append('output_format', g.outputFormat)
-      if (g.moderation !== 'auto') fd.append('moderation', g.moderation)
-
-      res = await smartFetch(
-        `${v1}/images/edits`,
-        {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${apiKey}` },
-          body: fd,
-        },
-        config.useProxy
-      )
-      json = await res.json()
-    } else if (g.endpointMode === 'responses') {
-      // OpenAI Responses API (/v1/responses) 支持直接传 HTTPS image_url 或 Base64
-      const inputContent = [
-        ...allImageRefs.map((ref) => ({ type: 'input_image', image_url: ref })),
-        { type: 'input_text', text: prompt },
-      ]
-      const toolCfg: Record<string, any> = { type: 'image_generation' }
-      if (g.size !== 'auto') toolCfg.size = g.size
-      if (g.quality !== 'auto') toolCfg.quality = g.quality
-      if (g.background !== 'auto') toolCfg.background = g.background
-      if (g.inputFidelity) toolCfg.input_fidelity = g.inputFidelity
-      if (g.outputFormat) toolCfg.output_format = g.outputFormat
-
-      res = await smartFetch(
-        `${v1}/responses`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({
-            model,
-            input: [{ role: 'user', content: inputContent }],
-            tools: [toolCfg],
-          }),
-        },
-        config.useProxy
-      )
-      json = await res.json()
-    } else {
-      // 兼容中转站 Chat Completions，支持直接传 HTTPS URL
-      const content = [
-        { type: 'text', text: prompt },
-        ...allImageRefs.map((ref) => ({ type: 'image_url', image_url: { url: ref } })),
-      ]
-      res = await smartFetch(
-        `${v1}/chat/completions`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({
-            model,
-            messages: [{ role: 'user', content }],
-            modalities: ['text', 'image'],
-          }),
-        },
-        config.useProxy
-      )
-      json = await res.json()
+      break
     }
-  }
-  // =========================================================================
-  // 协议 2: Google Gemini 原生 / Nano Banana
-  // =========================================================================
-  else if (provider === 'gemini') {
-    const gm = config.geminiParams
-    if (gm.endpointMode === 'native') {
-      const root = baseUrl.replace(/\/v1(?:beta)?$/, '')
-      const url = `${root}/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`
-      const parts = [
-        ...allImageRefs.map((du) => ({
-          inlineData: { mimeType: 'image/png', data: du.split(',')[1] },
-        })),
-        { text: prompt },
-      ]
-      const isGemini3 = model.includes('gemini-3')
-      const imageConfig: Record<string, string> = {
-        aspectRatio: gm.aspectRatio,
+
+    // =======================================================================
+    // 协议 2: Gemini（原生 / OpenAI 兼容中转）
+    // =======================================================================
+    case 'gemini_native': {
+      const gm = config.geminiParams
+      if (gm.endpointMode === 'native') {
+        const root = baseUrl.replace(/\/v1(?:beta)?$/, '')
+        const url = `${root}/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(auth)}`
+        const parts = [
+          ...allImageRefs.map((du) => ({
+            inlineData: { mimeType: 'image/png', data: du.split(',')[1] },
+          })),
+          { text: prompt },
+        ]
+        const isGemini3 = model.includes('gemini-3')
+        const imageConfig: Record<string, string> = { aspectRatio: gm.aspectRatio }
+        if (isGemini3 && gm.imageSize) imageConfig.imageSize = gm.imageSize
+
+        res = await smartFetch(
+          url,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-goog-api-key': auth },
+            body: JSON.stringify({
+              contents: [{ role: 'user', parts }],
+              generationConfig: {
+                responseModalities: ['TEXT', 'IMAGE'],
+                imageConfig,
+              },
+            }),
+          },
+          config.useProxy
+        )
+        json = await res.json()
+      } else {
+        const v1 = joinV1(baseUrl)
+        const content = [
+          { type: 'text', text: `${prompt}\n(Output aspect ratio: ${gm.aspectRatio}, resolution: ${gm.imageSize})` },
+          ...allImageRefs.map((ref) => ({ type: 'image_url', image_url: { url: ref } })),
+        ]
+        res = await smartFetch(
+          `${v1}/chat/completions`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth}` },
+            body: JSON.stringify({ model, messages: [{ role: 'user', content }], modalities: ['text', 'image'] }),
+          },
+          config.useProxy
+        )
+        json = await res.json()
       }
-      if (isGemini3 && gm.imageSize) {
-        imageConfig.imageSize = gm.imageSize
-      }
+      break
+    }
+
+    // =======================================================================
+    // 协议 3: 阿里云百炼 Qwen-Image
+    // =======================================================================
+    case 'dashscope': {
+      const qw = config.qwenParams
+      const endpoint = baseUrl.includes('/services/aigc/')
+        ? baseUrl
+        : `${baseUrl.replace(/\/api\/v1$/, '')}/api/v1/services/aigc/multimodal-generation/generation`
+
+      const content = [...imageRefs.map((ref) => ({ image: ref })), { text: prompt }]
 
       res = await smartFetch(
-        url,
+        endpoint,
         {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-goog-api-key': apiKey,
-          },
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth}` },
           body: JSON.stringify({
-            contents: [{ role: 'user', parts }],
-            generationConfig: {
-              responseModalities: ['TEXT', 'IMAGE'],
-              imageConfig,
+            model,
+            input: { messages: [{ role: 'user', content }] },
+            parameters: {
+              size: qw.size,
+              n: qw.n || 1,
+              prompt_extend: qw.promptExtend,
+              watermark: qw.watermark,
+              ...(qw.negativePrompt.trim() ? { negative_prompt: qw.negativePrompt.trim() } : {}),
             },
           }),
         },
         config.useProxy
       )
       json = await res.json()
-    } else {
-      const v1 = baseUrl.endsWith('/v1') ? baseUrl : `${baseUrl}/v1`
-      const content = [
-        { type: 'text', text: `${prompt}\n(Output aspect ratio: ${gm.aspectRatio}, resolution: ${gm.imageSize})` },
-        ...allImageRefs.map((ref) => ({ type: 'image_url', image_url: { url: ref } })),
-      ]
+      break
+    }
+
+    // =======================================================================
+    // 协议 4: 火山方舟 Doubao Seedream
+    // =======================================================================
+    case 'ark': {
+      const db = config.doubaoParams
+      let endpoint = baseUrl
+      if (!endpoint.endsWith('/images/generations')) {
+        endpoint = endpoint.endsWith('/api/v3') || endpoint.endsWith('/v1')
+          ? `${endpoint}/images/generations`
+          : `${endpoint}/api/v3/images/generations`
+      }
+
       res = await smartFetch(
-        `${v1}/chat/completions`,
+        endpoint,
         {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${apiKey}`,
-          },
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth}` },
           body: JSON.stringify({
             model,
-            messages: [{ role: 'user', content }],
-            modalities: ['text', 'image'],
+            prompt,
+            image: allImageRefs,
+            size: db.size,
+            sequential_image_generation: db.sequentialImageGeneration,
+            watermark: db.watermark,
+            response_format: db.responseFormat,
           }),
         },
         config.useProxy
       )
       json = await res.json()
+      break
     }
-  }
-  // =========================================================================
-  // 协议 3: 阿里云百炼 Qwen-Image (DashScope multimodal-generation)
-  // =========================================================================
-  else if (provider === 'qwen') {
-    const qw = config.qwenParams
-    const endpoint = baseUrl.includes('/services/aigc/')
-      ? baseUrl
-      : `${baseUrl.replace(/\/api\/v1$/, '')}/api/v1/services/aigc/multimodal-generation/generation`
 
-    // Qwen-Image 原生支持直接传入公网 HTTPS URL 或 Base64 Data URL: {"image": "https://..."}
-    const content = [
-      ...imageRefs.map((ref) => ({ image: ref })),
-      { text: prompt },
-    ]
+    // =======================================================================
+    // 协议 5: MiniMax 海螺 /v1/image_generation
+    // subject_reference 每次仅接受 1 张参考图（type 仅 character）
+    // =======================================================================
+    case 'minimax': {
+      const mm = config.minimaxParams
+      const endpoint = baseUrl.endsWith('/v1/image_generation')
+        ? baseUrl
+        : `${baseUrl.replace(/\/v1$/, '')}/v1/image_generation`
 
-    res = await smartFetch(
-      endpoint,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model,
-          input: {
-            messages: [
-              {
-                role: 'user',
-                content,
-              },
-            ],
-          },
-          parameters: {
-            size: qw.size,
-            n: qw.n || 1,
-            prompt_extend: qw.promptExtend,
-            watermark: qw.watermark,
-            ...(qw.negativePrompt.trim() ? { negative_prompt: qw.negativePrompt.trim() } : {}),
-          },
-        }),
-      },
-      config.useProxy
-    )
-    json = await res.json()
-  }
-  // =========================================================================
-  // 协议 4: 字节火山方舟 Doubao Seedream (/api/v3/images/generations)
-  // =========================================================================
-  else {
-    const db = config.doubaoParams
-    let endpoint = baseUrl
-    if (!endpoint.endsWith('/images/generations')) {
-      if (endpoint.endsWith('/api/v3') || endpoint.endsWith('/v1')) {
-        endpoint = `${endpoint}/images/generations`
-      } else {
-        endpoint = `${endpoint}/api/v3/images/generations`
+      let referenceSrc: string | null = null
+      if (mm.referenceMode === 'stitch') {
+        referenceSrc = await stitchRecipeCanvas(recipe)
+      } else if (mm.referenceMode === 'portrait') {
+        referenceSrc =
+          (recipe.portrait && (recipe.portrait.原图 || recipe.portrait.缩略图)) || rawSources[0] || null
+      } else if (mm.referenceMode === 'first') {
+        referenceSrc = rawSources[0] || null
       }
+
+      const subjectReference = referenceSrc
+        ? [{ type: 'character', image_file: await srcToPngDataUrl(referenceSrc) }]
+        : []
+
+      const seedNum = Number(mm.seed)
+      const payload: Record<string, any> = {
+        model,
+        prompt,
+        aspect_ratio: mm.aspectRatio,
+        response_format: mm.responseFormat,
+        n: mm.n || 1,
+        prompt_optimizer: mm.promptOptimizer,
+      }
+      if (Number.isFinite(seedNum) && mm.seed.trim() !== '') payload.seed = seedNum
+      if (subjectReference.length) payload.subject_reference = subjectReference
+
+      res = await smartFetch(
+        endpoint,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth}` },
+          body: JSON.stringify(payload),
+        },
+        config.useProxy
+      )
+      json = await res.json()
+      break
     }
 
-    res = await smartFetch(
-      endpoint,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
+    // =======================================================================
+    // 协议 6: 自订 JSON 模板
+    // =======================================================================
+    case 'custom_json': {
+      const tpl = p.template
+      if (!tpl?.bodyTemplate?.trim()) {
+        throw new Error(`「${p.name}」尚未填写请求模板 (bodyTemplate)`)
+      }
+      const body = renderBodyTemplateSafe(tpl.bodyTemplate, {
+        prompt,
+        model,
+        image_urls: allImageRefs,
+        image_url: allImageRefs[0] || '',
+        n: 1,
+        aspect_ratio: config.minimaxParams.aspectRatio,
+      })
+
+      try {
+        JSON.parse(body)
+      } catch {
+        throw new Error('请求模板渲染后不是合法 JSON，请检查占位符与引号')
+      }
+
+      res = await smartFetch(
+        baseUrl,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${auth}`,
+            ...parseExtraHeaders(tpl.extraHeaders),
+          },
+          body,
         },
-        body: JSON.stringify({
-          model,
-          prompt,
-          image: allImageRefs, // Seedream 4.0 / 4.5 / 5.0 原生支持传入多张参考图 URL 数组或 Base64 数组
-          size: db.size,
-          sequential_image_generation: db.sequentialImageGeneration,
-          watermark: db.watermark,
-          response_format: db.responseFormat,
-        }),
-      },
-      config.useProxy
-    )
-    json = await res.json()
+        config.useProxy
+      )
+      json = await res.json()
+
+      const picked = parsePath(json, tpl.imagePath || 'data[0].url')
+      if (typeof picked === 'string' && picked) {
+        return {
+          imageUrl: /^https?:\/\//i.test(picked) ? picked : `data:image/png;base64,${picked}`,
+          modelUsed: model,
+          providerUsed: p.id,
+        }
+      }
+      break
+    }
+
+    default:
+      throw new Error(`不支持的请求协议：${p.protocol}`)
   }
 
-  if (!res.ok) {
+  if (!res!.ok) {
     const errMsg =
       json?.error?.message ||
       json?.message ||
       json?.code ||
-      `请求失败 (HTTP ${res.status})`
-    throw new Error(`[${PROVIDER_META[provider].shortName}] ${errMsg}`)
+      json?.base_resp?.status_msg ||
+      `请求失败 (HTTP ${res!.status})`
+    throw new Error(`[${p.shortName}] ${errMsg}`)
+  }
+
+  // MiniMax 即使 HTTP 200 也可能在 base_resp 里报错（风控 / 余额 / Key）
+  if (typeof json?.base_resp?.status_code === 'number' && json.base_resp.status_code !== 0) {
+    throw new Error(`[${p.shortName}] ${json.base_resp.status_msg || `错误码 ${json.base_resp.status_code}`}`)
   }
 
   const imageUrl = extractUniversalImage(json)
@@ -734,5 +805,61 @@ export async function generateCharacterImage(params: {
     throw new Error(`接口已响应但未解析到图片输出：${fallbackText}`)
   }
 
-  return { imageUrl, modelUsed: model, providerUsed: provider }
+  return { imageUrl, modelUsed: model, providerUsed: p.id }
+}
+
+/**
+ * 用 chat 类供应商（如 Ollama Cloud）改写/扩写提示词。
+ * 目前仅支持 OpenAI Chat 兼容协议。
+ */
+export async function rewritePromptWithChat(params: {
+  config: ApiConfig
+  providerId: string
+  prompt: string
+  images?: string[]
+  instruction?: string
+}): Promise<string> {
+  const { config, providerId, prompt, images = [], instruction } = params
+  const p = resolveProvider(config, providerId)
+  if (!p) throw new Error(`找不到供应商配置：${providerId}`)
+  if (p.protocol !== 'openai_chat' && p.protocol !== 'gemini_native') {
+    throw new Error(`「${p.name}」不是 OpenAI Chat 兼容协议，暂不支持扩写`)
+  }
+
+  const auth = await resolveAuth(p)
+  if (!auth) throw new Error(`请先为 ${p.name} 配置 API Key 或完成 OAuth 授权`)
+
+  const imageParts = await Promise.all(images.slice(0, 4).map(srcToPngDataUrl))
+  const systemText =
+    instruction ||
+    '你是资深的 AI 绘画提示词工程师。请把用户给的参考信息改写成一段中文生图提示词：保留人物五官、服装款式、姿势与画风的全部关键细节，去掉“图1/图2”这类指代，改为直接描述；不解释、不加标题、不输出多余内容。'
+
+  const content: any[] = [{ type: 'text', text: prompt }]
+  for (const du of imageParts) content.push({ type: 'image_url', image_url: { url: du } })
+
+  const v1 = joinV1(p.baseUrl.replace(/\/+$/, ''))
+  const res = await smartFetch(
+    `${v1}/chat/completions`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth}` },
+      body: JSON.stringify({
+        model: p.model,
+        messages: [
+          { role: 'system', content: systemText },
+          { role: 'user', content },
+        ],
+      }),
+    },
+    config.useProxy
+  )
+  const json: any = await res.json()
+  if (!res.ok) {
+    throw new Error(`[${p.shortName}] ${json?.error?.message || `HTTP ${res.status}`}`)
+  }
+  const text = json?.choices?.[0]?.message?.content
+  if (typeof text !== 'string' || !text.trim()) {
+    throw new Error('提示词扩写未返回文本')
+  }
+  return text.trim()
 }

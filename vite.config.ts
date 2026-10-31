@@ -67,10 +67,79 @@ function localAssetsAndProxyPlugin(): Plugin {
     }
   }
 
+
+  // 本地開發版的 /api/oauth/token：與 Cloudflare Function 行為一致，
+  // secret 從 process.env 讀取，且同樣要求 OAUTH_TOKEN_HOSTS 白名單。
+  const handleOAuthToken = async (req: any, res: any) => {
+    const send = (status: number, body: unknown) => {
+      res.statusCode = status
+      res.setHeader('Content-Type', 'application/json; charset=utf-8')
+      res.end(JSON.stringify(body))
+    }
+    try {
+      const chunks: Buffer[] = []
+      for await (const chunk of req) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+      }
+      const payload = JSON.parse(Buffer.concat(chunks).toString('utf-8') || '{}')
+      const tokenUrl = String(payload.tokenUrl || '')
+      if (!/^https:\/\//i.test(tokenUrl)) {
+        send(400, { error: 'invalid_token_url', message: 'tokenUrl 必须是 https 地址' })
+        return
+      }
+      const target = new URL(tokenUrl)
+      const allowList = (process.env.OAUTH_TOKEN_HOSTS || '')
+        .split(',')
+        .map((h) => h.trim().toLowerCase())
+        .filter(Boolean)
+      if (!allowList.includes(target.host.toLowerCase())) {
+        send(403, {
+          error: 'token_host_not_allowed',
+          message: `tokenUrl 主机 ${target.host} 不在 OAUTH_TOKEN_HOSTS 白名单内（本地开发请在 .env 设定）`,
+        })
+        return
+      }
+      const secret = payload.clientSecretEnv ? process.env[String(payload.clientSecretEnv)] : undefined
+      const body = new URLSearchParams()
+      for (const [k, v] of Object.entries(payload.form || {})) {
+        if (typeof v === 'string') body.set(k, v)
+      }
+      if (payload.clientId && !body.has('client_id')) body.set('client_id', String(payload.clientId))
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Accept: 'application/json',
+      }
+      if (secret) {
+        if (payload.tokenAuthStyle === 'basic') {
+          headers.Authorization = `Basic ${Buffer.from(`${payload.clientId || ''}:${secret}`).toString('base64')}`
+        } else {
+          body.set('client_secret', secret)
+        }
+      }
+
+      const upstream = await fetch(target.toString(), { method: 'POST', headers, body })
+      const text = await upstream.text()
+      let data: unknown
+      try {
+        data = JSON.parse(text)
+      } catch {
+        data = Object.fromEntries(new URLSearchParams(text).entries())
+      }
+      send(upstream.status, data)
+    } catch (err: any) {
+      send(502, { error: 'upstream_error', message: err?.message || 'OAuth token exchange failed' })
+    }
+  }
+
   const serve = (req: any, res: any, next: any) => {
     const rawUrl = (req.url || '').split('?')[0]
     if (rawUrl === '/api/proxy') {
       void handleProxy(req, res)
+      return
+    }
+    if (rawUrl === '/api/oauth/token') {
+      void handleOAuthToken(req, res)
       return
     }
     const decoded = decodeURIComponent(rawUrl)
