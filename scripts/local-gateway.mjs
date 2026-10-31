@@ -23,7 +23,10 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 
 const PORT = Number(process.env.PORT || 8788)
-const HOST = process.env.HOST || '127.0.0.1'
+const HOSTS = (process.env.HOST || '127.0.0.1')
+  .split(',')
+  .map((h) => h.trim())
+  .filter(Boolean)
 const UPSTREAM = (process.env.MAGPIE_BASE_URL || 'http://127.0.0.1:3425').replace(/\/+$/, '')
 
 function readGeminiKey() {
@@ -167,7 +170,7 @@ function json(res, status, body, extra = {}) {
   res.end(buf)
 }
 
-const server = http.createServer(async (req, res) => {
+const handler = async (req, res) => {
   const cors = corsHeaders(req)
 
   if (req.method === 'OPTIONS') {
@@ -292,12 +295,14 @@ const server = http.createServer(async (req, res) => {
     json(res, 502, { error: { message: err.message } }, cors)
     console.log(`${req.method} ${url.pathname} -> 502 ${err.message}`)
   }
-})
+}
 
-server.listen(PORT, HOST, () => {
-  console.log(`local gateway  http://${HOST}:${PORT}`)
+for (const host of HOSTS) {
+http.createServer(handler).listen(PORT, host, () => {
+  console.log(`local gateway  http://${host}:${PORT}`)
   console.log(`  upstream     ${UPSTREAM}`)
   console.log(`  api key      ${API_KEY ? 'loaded (from env or ~/.gemini/.env)' : 'MISSING'}`)
   console.log(`  proxying     /v1/*  (images/generations, images/edits, chat/completions, models)`)
   console.log(`  antigravity  /agy/v1/*  → ${AGY_BIN} -p  (Google Pro 额度，文字)`)
 })
+}

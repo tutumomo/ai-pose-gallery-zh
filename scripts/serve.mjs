@@ -19,7 +19,10 @@ import { fileURLToPath } from 'node:url'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const DIST = path.join(ROOT, 'dist')
 const PORT = Number(process.env.PORT || 8789)
-const HOST = process.env.HOST || '127.0.0.1'
+const HOSTS = (process.env.HOST || '127.0.0.1')
+  .split(',')
+  .map((h) => h.trim())
+  .filter(Boolean)
 const OAUTH_TOKEN_HOSTS = (process.env.OAUTH_TOKEN_HOSTS || '')
   .split(',')
   .map((h) => h.trim().toLowerCase())
@@ -217,7 +220,7 @@ async function handleOAuthToken(req, res) {
 }
 
 // -------------------------------------------------------------------- 主體
-const server = http.createServer(async (req, res) => {
+const handler = async (req, res) => {
   const urlPath = (req.url || '/').split('?')[0]
 
   if (req.method === 'OPTIONS') {
@@ -256,11 +259,13 @@ const server = http.createServer(async (req, res) => {
     return
   }
   serveIndex(res)
-})
+}
 
-server.listen(PORT, HOST, () => {
-  console.log(`pose gallery server  http://${HOST}:${PORT}`)
+for (const host of HOSTS) {
+http.createServer(handler).listen(PORT, host, () => {
+  console.log(`pose gallery server  http://${host}:${PORT}`)
   console.log(`  static       dist/ + repo img|thumbs|data`)
   console.log(`  api          /api/proxy  /api/oauth/token  /api/health`)
   console.log(`  oauth hosts  ${OAUTH_TOKEN_HOSTS.length ? OAUTH_TOKEN_HOSTS.join(', ') : '(未設定 → 一律 403)'}`)
 })
+}

@@ -118,6 +118,20 @@ node scripts/serve.mjs     # → http://127.0.0.1:8789
 - 素材（`img/` `thumbs/` `data/`）直接從 repo 根目錄出，不做 1.1GB 拷貝。
 - 未知路徑回 `dist/index.html`（前端路由 fallback）。
 
+### 三個位址別搞混
+
+| 位址 | 是什麼 |
+|---|---|
+| `https://ai-pose-gallery-zh.tutumomo.workers.dev/` | 網站本體，跑在 Cloudflare |
+| `http://100.84.216.26:8789/`（或 `http://127.0.0.1:8789/`） | 網站本體，跑在本機（同一份程式碼） |
+| `http://127.0.0.1:8788/v1`、`/agy/v1` | **API 端點**，不是網站；是本機 gateway 給 app 呼叫的介面 |
+
+呼叫鏈：**網站 → gateway(8788) → magpie / agy → 你的訂閱額度**
+
+實測限制：`https://…workers.dev` **無法**呼叫 `http://…:8788`（Mixed Content + Private Network Access 兩重封鎖）。要用 magpie / agy 只能開自架版 `http://…:8789`。
+
+另外 `workers.dev` 與 `8789` 是不同 origin，API Key / 自訂供應商 / 生成歷史**各自存在各的瀏覽器儲存**，不會同步。
+
 ### systemd 常駐（本機已設定）
 
 ```bash
@@ -127,8 +141,8 @@ systemctl --user restart pose-gallery.service
 
 | 服務 | 監聽 | 用途 |
 |---|---|---|
-| `pose-gallery.service` | `100.84.216.26:8789` | 網站本體 + API 端點 |
-| `pose-gallery-gateway.service` | `100.84.216.26:8788` | 本機上游 CORS 轉接（magpie / agy） |
+| `pose-gallery.service` | `127.0.0.1:8789` + `100.84.216.26:8789` | 網站本體 + API 端點 |
+| `pose-gallery-gateway.service` | `127.0.0.1:8788` + `100.84.216.26:8788` | 本機上游 CORS 轉接（magpie / agy） |
 
 綁 Tailscale IP 而不是 `0.0.0.0`，避免曝露在區網。手機裝 Tailscale 後直接開 **http://100.84.216.26:8789** 就能用。
 
