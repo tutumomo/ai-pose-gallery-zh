@@ -127,6 +127,23 @@ API key 只留在 gateway process 內（優先讀 `MAGPIE_API_KEY` 環境變數�
 
 > 線上部署版（`*.workers.dev`）無法連到 `127.0.0.1`，要用 magpie 就跑本機版；若要線上也能用，需要另外把 gateway  exposes 出去（tunnel / VPS）。
 
+### Antigravity CLI（Google Pro 额度）走本机 bridge
+
+`scripts/local-gateway.mjs` 除了轉發 `/v1/*`，還會把 `/agy/v1/*` 交給本機的 **Antigravity CLI（`agy`）**：
+
+```
+瀏覽器 → http://127.0.0.1:8788/agy/v1/chat/completions → agy -p "…" → 你的 Google 帳號額度
+```
+
+- `agy` 自己處理 Google 帳號 OAuth，token 不經過 gateway、也不進瀏覽器。
+- app 端設定：自訂供應商 → 快速範本選 **agy Antigravity（Google Pro 额度）**（Base URL `http://127.0.0.1:8788/agy/v1`），再到「提示詞擴寫」把它設為提示詞供應商。
+- 可用模型：`gemini-4-argon-high`、`magpie/antigravity/gemini-4-argon`、`magpie/antigravity/claude-sonnet-5-5`、`magpie/group/gemini`（用 `agy models` 可看完整清單；`AGY_MODELS` 環境變數可覆寫）。
+- 額度錯誤長這樣（代表 **Google 帳號的 Antigravity 額度用完**，不是設定錯）：
+  ```
+  Antigravity: Individual quota reached. … Resets in 11m36s.
+  ```
+- 想讓 `agy` 完全走自己的 Google 帳號（不經 magpie）：把 `~/.gemini/antigravity-cli/settings.json` 的 `modelProvider` 移除後重新登入。
+
 ## 自订供应商与 OAuth
 
 ### 1. 新增自订供应商

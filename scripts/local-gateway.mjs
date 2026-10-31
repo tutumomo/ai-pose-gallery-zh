@@ -20,6 +20,7 @@ import http from 'node:http'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { spawn } from 'node:child_process'
 
 const PORT = Number(process.env.PORT || 8788)
 const HOST = process.env.HOST || '127.0.0.1'
@@ -39,6 +40,112 @@ function readGeminiKey() {
 }
 
 const API_KEY = readGeminiKey()
+
+// agy（Antigravity CLI）走自己的 Google 帳號 OAuth，token 不會離開 CLI process。
+// 這裡只把 ~/.gemini/.env 的後端設定餵給子行程，app 端永遠看不到 token。
+const AGY_BIN = process.env.AGY_BIN || 'agy'
+const AGY_TIMEOUT_MS = Number(process.env.AGY_TIMEOUT_MS || 240000)
+const AGY_MODELS = (
+  process.env.AGY_MODELS ||
+  'gemini-4-argon-high,magpie/antigravity/gemini-4-argon,magpie/antigravity/claude-sonnet-5-5,magpie/group/gemini'
+)
+  .split(',')
+  .map((m) => m.trim())
+  .filter(Boolean)
+
+function readGeminiEnv() {
+  const envPath = path.join(os.homedir(), '.gemini', '.env')
+  const out = {}
+  try {
+    for (const line of fs.readFileSync(envPath, 'utf8').split('\n')) {
+      const m = line.match(/^([A-Z0-9_]+)=(.*)$/)
+      if (!m) continue
+      out[m[1]] = m[2].trim().replace(/^["']|["']$/g, '')
+    }
+  } catch {
+    // 沒有就讓 agy 用它自己的設定
+  }
+  return out
+}
+
+/** 把 prompt 丟給 agy 的 print mode；回傳純文字 */
+function runAgyl(prompt, model) {
+  return new Promise((resolve, reject) => {
+    const args = ['-p', prompt, '--output-format', 'json', '--print-timeout', `${Math.floor(AGY_TIMEOUT_MS / 1000)}s`]
+    if (model) args.push('--model', model)
+    const child = spawn(AGY_BIN, args, {
+      env: { ...process.env, ...readGeminiEnv() },
+      cwd: os.homedir(),
+    })
+    let out = ''
+    let err = ''
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      reject(new Error(`agy 逾時（${Math.round(AGY_TIMEOUT_MS / 1000)}s）`))
+    }, AGY_TIMEOUT_MS + 5000)
+    child.stdout.on('data', (d) => (out += d.toString()))
+    child.stderr.on('data', (d) => (err += d.toString()))
+    child.on('error', (e) => {
+      clearTimeout(timer)
+      reject(e)
+    })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      try {
+        if (code !== 0 && !out.trim()) {
+          reject(new Error((err || out || `agy exit ${code}`).trim().slice(0, 400)))
+          return
+        }
+        resolve(extractAgylText(out))
+      } catch (e) {
+        // agy 回報的錯誤要變成 HTTP 502，不能讓 gateway 整個掛掉
+        reject(e instanceof Error ? e : new Error(String(e)))
+      }
+    })
+  })
+}
+
+function extractAgylText(raw) {
+  const trimmed = raw.trim()
+  let json
+  try {
+    json = JSON.parse(trimmed)
+  } catch {
+    return trimmed // 不是 JSON 就當純文字
+  }
+  // agy print mode 的封包：{ status, response, error, usage, ... }
+  if (json && json.status && String(json.status).toUpperCase() !== 'SUCCESS') {
+    throw new Error(String(json.error || json.status || 'agy 執行失敗').slice(0, 400))
+  }
+  const pick =
+    json?.response ||
+    json?.result?.text ||
+    json?.response?.text ||
+    json?.text ||
+    json?.result ||
+    json?.content ||
+    json?.message?.content
+  if (typeof pick === 'string' && pick.trim()) return pick.trim()
+  if (Array.isArray(json)) {
+    const joined = json
+      .map((x) => x?.text || x?.content || x?.result || '')
+      .filter(Boolean)
+      .join('\n')
+    if (joined.trim()) return joined.trim()
+  }
+  return trimmed
+}
+
+// agy 是單一 CLI，序列化避免同時開多個
+let agyQueue = Promise.resolve()
+function enqueueAgyl(task) {
+  const result = agyQueue.then(task, task)
+  agyQueue = result.then(
+    () => undefined,
+    () => undefined
+  )
+  return result
+}
 
 function corsHeaders(req) {
   const origin = req.headers.origin || '*'
@@ -82,6 +189,71 @@ const server = http.createServer(async (req, res) => {
     return
   }
 
+  if (url.pathname === '/agy/health') {
+    json(
+      res,
+      200,
+      {
+        ok: true,
+        bin: AGY_BIN,
+        models: AGY_MODELS,
+        note: 'agy 自行处理 Google 账号 OAuth，token 不经过 gateway',
+      },
+      cors
+    )
+    return
+  }
+
+  // /agy/v1/* → Antigravity CLI（Google Pro 额度，文字）
+  if (url.pathname === '/agy/v1/chat/completions') {
+    const chunks = []
+    for await (const chunk of req) chunks.push(chunk)
+    let body = {}
+    try {
+      body = JSON.parse(Buffer.concat(chunks).toString('utf-8') || '{}')
+    } catch {
+      json(res, 400, { error: { message: 'invalid json' } }, cors)
+      return
+    }
+    const messages = Array.isArray(body.messages) ? body.messages : []
+    const system = messages.find((m) => m?.role === 'system')?.content
+    const last = [...messages].reverse().find((m) => m?.role === 'user')?.content
+    const prompt = [system, typeof last === 'string' ? last : JSON.stringify(last ?? '')]
+      .filter(Boolean)
+      .join('\n\n')
+    try {
+      const model = body.model || AGY_MODELS[0]
+      const text = await enqueueAgyl(() => runAgyl(prompt, model))
+      json(
+        res,
+        200,
+        {
+          id: `agy-${Date.now()}`,
+          object: 'chat.completion',
+          created: Math.floor(Date.now() / 1000),
+          model: body.model || AGY_MODELS[0],
+          choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }],
+        },
+        cors
+      )
+      console.log('POST /agy/v1/chat/completions -> 200')
+    } catch (err) {
+      json(res, 502, { error: { message: err.message } }, cors)
+      console.log(`POST /agy/v1/chat/completions -> 502 ${err.message}`)
+    }
+    return
+  }
+
+  if (url.pathname === '/agy/v1/models') {
+    json(
+      res,
+      200,
+      { object: 'list', data: AGY_MODELS.map((id) => ({ id, object: 'model', owned_by: 'agy' })) },
+      cors
+    )
+    return
+  }
+
   if (!url.pathname.startsWith('/v1/')) {
     json(res, 404, { error: { message: 'only /v1/* is proxied' } }, cors)
     return
@@ -118,4 +290,5 @@ server.listen(PORT, HOST, () => {
   console.log(`  upstream     ${UPSTREAM}`)
   console.log(`  api key      ${API_KEY ? 'loaded (from env or ~/.gemini/.env)' : 'MISSING'}`)
   console.log(`  proxying     /v1/*  (images/generations, images/edits, chat/completions, models)`)
+  console.log(`  antigravity  /agy/v1/*  → ${AGY_BIN} -p  (Google Pro 额度，文字)`)
 })

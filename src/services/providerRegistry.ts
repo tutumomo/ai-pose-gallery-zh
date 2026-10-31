@@ -280,6 +280,26 @@ export const CUSTOM_PROVIDER_PRESETS: CustomProviderPreset[] = [
     }),
   },
   {
+    id: 'agy-antigravity',
+    label: 'agy Antigravity（Google Pro 额度）',
+    apply: (p) => ({
+      ...p,
+      name: 'Antigravity（agy）',
+      protocol: 'openai_chat',
+      baseUrl: 'http://127.0.0.1:8788/agy/v1',
+      models: [
+        'gemini-4-argon-high',
+        'magpie/antigravity/gemini-4-argon',
+        'magpie/antigravity/claude-sonnet-5-5',
+        'magpie/group/gemini',
+      ],
+      model: 'gemini-4-argon-high',
+      purpose: 'chat',
+      authMode: 'apiKey',
+      apiKey: 'local',
+    }),
+  },
+  {
     id: 'ollama-cloud',
     label: 'Ollama Cloud · 文字',
     apply: (p) => ({
