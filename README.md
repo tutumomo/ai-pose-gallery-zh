@@ -203,6 +203,20 @@ API key 只留在 gateway process 內（優先讀 `MAGPIE_API_KEY` 環境變數�
   ```
 - 想讓 `agy` 完全走自己的 Google 帳號（不經 magpie）：把 `~/.gemini/antigravity-cli/settings.json` 的 `modelProvider` 移除後重新登入。
 
+## 部署（一定要用 scripts/deploy.sh）
+
+```bash
+bash scripts/deploy.sh
+```
+
+**不要**直接 `pnpm build && npx wrangler deploy`：`pnpm build` 會清空 `dist/`，素材（`data/` `thumbs/` `img/`）要靠 `scripts/build.sh` 的 `cp` 補進去。漏掉那一步會把「只有程式碼」的資產集推上線，所有圖片路徑被 SPA fallback 回 `index.html`（HTTP 200 + `text/html`），前端解碼失敗報「加载图片失败」。
+
+`scripts/deploy.sh` 會：build（含素材）→ 檢查 `dist` 素材數量（img/thumbs > 1000、data > 3）→ deploy → 上線後抽驗 `content-type`。任何一步失敗就中止。
+
+> 另外：部署指令不要接管道（`| tail`），管道會蓋掉 wrangler 的退出碼，失敗會看起來像成功。
+
+---
+
 ## 自订供应商与 OAuth
 
 ### 1. 新增自订供应商
