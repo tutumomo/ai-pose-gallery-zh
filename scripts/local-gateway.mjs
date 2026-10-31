@@ -215,11 +215,21 @@ const server = http.createServer(async (req, res) => {
       return
     }
     const messages = Array.isArray(body.messages) ? body.messages : []
-    const system = messages.find((m) => m?.role === 'system')?.content
-    const last = [...messages].reverse().find((m) => m?.role === 'user')?.content
-    const prompt = [system, typeof last === 'string' ? last : JSON.stringify(last ?? '')]
-      .filter(Boolean)
-      .join('\n\n')
+    // 只取文字：base64 參考圖會讓 argv 超長（spawn E2BIG），agy 文字模型也用不上
+    const textOf = (content) => {
+      if (typeof content === 'string') return content
+      if (Array.isArray(content)) {
+        return content
+          .filter((p) => p?.type === 'text' || typeof p?.text === 'string')
+          .map((p) => (typeof p?.text === 'string' ? p.text : ''))
+          .join('\n')
+      }
+      return ''
+    }
+    const system = textOf(messages.find((m) => m?.role === 'system')?.content)
+    const last = textOf([...messages].reverse().find((m) => m?.role === 'user')?.content)
+    const rawPrompt = [system, last].filter(Boolean).join('\n\n')
+    const prompt = rawPrompt.slice(0, Number(process.env.AGY_MAX_PROMPT_CHARS || 12000))
     try {
       const model = body.model || AGY_MODELS[0]
       const text = await enqueueAgyl(() => runAgyl(prompt, model))
